@@ -386,7 +386,7 @@ static bool is_local_impl(struct STATVFS &Vfs) {
   // NFS is the only non-local fstype??
   return !fstype.equals("nfs");
 #else
-  return !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
+  return false; // !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
 #endif
 }
 
