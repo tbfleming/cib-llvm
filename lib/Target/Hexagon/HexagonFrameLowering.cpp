@@ -225,7 +225,7 @@ namespace {
 bool HexagonCallFrameInformation::runOnMachineFunction(MachineFunction &MF) {
   auto &HFI = *MF.getSubtarget<HexagonSubtarget>().getFrameLowering();
   bool NeedCFI = MF.getMMI().hasDebugInfo() ||
-                 MF.getFunction()->needsUnwindTableEntry();
+                 MF.getFunction().needsUnwindTableEntry();
 
   if (!NeedCFI)
     return false;
@@ -336,6 +336,8 @@ static bool needsStackFrame(const MachineBasicBlock &MBB, const BitVector &CSR,
   /// in the block.
 static bool hasTailCall(const MachineBasicBlock &MBB) {
     MachineBasicBlock::const_iterator I = MBB.getLastNonDebugInstr();
+    if (I == MBB.end())
+      return false;
     unsigned RetOpc = I->getOpcode();
     return RetOpc == Hexagon::PS_tailcall_i || RetOpc == Hexagon::PS_tailcall_r;
 }
@@ -373,17 +375,17 @@ static bool isRestoreCall(unsigned Opc) {
 }
 
 static inline bool isOptNone(const MachineFunction &MF) {
-    return MF.getFunction()->hasFnAttribute(Attribute::OptimizeNone) ||
+    return MF.getFunction().hasFnAttribute(Attribute::OptimizeNone) ||
            MF.getTarget().getOptLevel() == CodeGenOpt::None;
 }
 
 static inline bool isOptSize(const MachineFunction &MF) {
-    const Function &F = *MF.getFunction();
+    const Function &F = MF.getFunction();
     return F.optForSize() && !F.optForMinSize();
 }
 
 static inline bool isMinSize(const MachineFunction &MF) {
-    return MF.getFunction()->optForMinSize();
+    return MF.getFunction().optForMinSize();
 }
 
 /// Implements shrink-wrapping of the stack frame. By default, stack frame
@@ -636,7 +638,9 @@ void HexagonFrameLowering::insertEpilogueInBlock(MachineBasicBlock &MBB) const {
 
   // Handle EH_RETURN.
   if (RetOpc == Hexagon::EH_RETURN_JMPR) {
-    BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::L2_deallocframe));
+    BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::L2_deallocframe))
+        .addDef(Hexagon::D15)
+        .addReg(Hexagon::R30);
     BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::A2_add), SP)
         .addReg(SP)
         .addReg(Hexagon::R28);
@@ -682,11 +686,15 @@ void HexagonFrameLowering::insertEpilogueInBlock(MachineBasicBlock &MBB) const {
   // otherwise just add deallocframe. The function could be returning via a
   // tail call.
   if (RetOpc != Hexagon::PS_jmpret || DisableDeallocRet) {
-    BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::L2_deallocframe));
+    BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::L2_deallocframe))
+      .addDef(Hexagon::D15)
+      .addReg(Hexagon::R30);
     return;
   }
   unsigned NewOpc = Hexagon::L4_return;
-  MachineInstr *NewI = BuildMI(MBB, RetI, dl, HII.get(NewOpc));
+  MachineInstr *NewI = BuildMI(MBB, RetI, dl, HII.get(NewOpc))
+      .addDef(Hexagon::D15)
+      .addReg(Hexagon::R30);
   // Transfer the function live-out registers.
   NewI->copyImplicitOps(MF, *RetI);
   MBB.erase(RetI);
@@ -709,10 +717,13 @@ void HexagonFrameLowering::insertAllocframe(MachineBasicBlock &MBB,
                                       MachineMemOperand::MOStore, 4, 4);
 
   DebugLoc dl = MBB.findDebugLoc(InsertPt);
+  unsigned SP = HRI.getStackRegister();
 
   if (NumBytes >= ALLOCFRAME_MAX) {
     // Emit allocframe(#0).
     BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::S2_allocframe))
+      .addDef(SP)
+      .addReg(SP)
       .addImm(0)
       .addMemOperand(MMO);
 
@@ -723,6 +734,8 @@ void HexagonFrameLowering::insertAllocframe(MachineBasicBlock &MBB,
       .addImm(-int(NumBytes));
   } else {
     BuildMI(MBB, InsertPt, dl, HII.get(Hexagon::S2_allocframe))
+      .addDef(SP)
+      .addReg(SP)
       .addImm(NumBytes)
       .addMemOperand(MMO);
   }
@@ -947,7 +960,7 @@ void HexagonFrameLowering::insertCFIInstructionsAt(MachineBasicBlock &MBB,
 }
 
 bool HexagonFrameLowering::hasFP(const MachineFunction &MF) const {
-  if (MF.getFunction()->hasFnAttribute(Attribute::Naked))
+  if (MF.getFunction().hasFnAttribute(Attribute::Naked))
     return false;
 
   auto &MFI = MF.getFrameInfo();
@@ -1383,8 +1396,7 @@ static void dump_registers(BitVector &Regs, const TargetRegisterInfo &TRI) {
 
 bool HexagonFrameLowering::assignCalleeSavedSpillSlots(MachineFunction &MF,
       const TargetRegisterInfo *TRI, std::vector<CalleeSavedInfo> &CSI) const {
-  DEBUG(dbgs() << __func__ << " on "
-               << MF.getFunction()->getName() << '\n');
+  DEBUG(dbgs() << __func__ << " on " << MF.getName() << '\n');
   MachineFrameInfo &MFI = MF.getFrameInfo();
   BitVector SRegs(Hexagon::NUM_TARGET_REGS);
 
