@@ -358,6 +358,11 @@ static bool shouldUseMmap(int FD,
     return false;
 #endif
 
+#if defined(__EMSCRIPTEN__)
+  // Emscripten doesn't have pages, so doesn't 0 fill.
+  return false;
+#endif
+
   return true;
 }
 
